@@ -38,13 +38,11 @@ pub async fn fetch_seasons() -> Result<Vec<DbSeason>, AnyError> {
     pb.set_message("Fetching NHL seasons...");
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
 
-    // Fetch the seasons list from web API
     let seasons_json = fetch_api_json("https://api-web.nhle.com/v1/season").await?;
     let season_years: Vec<i32> = serde_json::from_str(&seasons_json)?;
 
     pb.set_message("Fetching season date data...");
 
-    // Attempt to fetch enriched date data from stats API
     let stats_map: HashMap<i32, StatsSeasonRecord> =
         match fetch_api_json("https://api.nhle.com/stats/rest/en/season?limit=-1").await {
             Ok(json) => match serde_json::from_str::<StatsSeasonResponse>(&json) {
@@ -66,7 +64,6 @@ pub async fn fetch_seasons() -> Result<Vec<DbSeason>, AnyError> {
             }
         };
 
-    // Build DbSeason records
     let mut seasons = Vec::new();
     for season_year in season_years {
         let stats = stats_map.get(&season_year);

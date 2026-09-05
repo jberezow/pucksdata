@@ -8,8 +8,6 @@ use crate::{
     AnyError,
 };
 
-// ── Stats API deserialization structs ────────────────────────────────────────
-
 /// Generic paginated response wrapper for the NHL stats REST API.
 #[derive(Deserialize)]
 pub struct StatsApiResponse<T> {
@@ -19,8 +17,8 @@ pub struct StatsApiResponse<T> {
 
 /// Stats /en/game endpoint record.
 ///
-/// CRITICAL: NHL uses "visitingTeamId" / "visitingScore", NOT "awayTeamId" / "awayScore".
-/// This struct is SEPARATE from BoxscoreGame — do not merge (Pitfall 5).
+/// The stats API names the visitor fields `visitingTeamId` and
+/// `visitingScore`, unlike the boxscore API's nested `awayTeam` object.
 #[derive(Deserialize)]
 pub struct StatsGameRecord {
     pub id: i64,
@@ -31,15 +29,13 @@ pub struct StatsGameRecord {
     pub game_type: i16,
     #[serde(rename = "homeTeamId")]
     pub home_team_id: i64,
-    #[serde(rename = "visitingTeamId")] // NOT "awayTeamId"
+    #[serde(rename = "visitingTeamId")]
     pub away_team_id: i64,
     #[serde(rename = "homeScore")]
     pub home_score: Option<i16>,
-    #[serde(rename = "visitingScore")] // NOT "awayScore"
+    #[serde(rename = "visitingScore")]
     pub away_score: Option<i16>,
 }
-
-// ── Boxscore API deserialization structs ─────────────────────────────────────
 
 /// Localized name object used by the web API (e.g. venue, venueLocation).
 #[derive(Deserialize)]
@@ -56,8 +52,7 @@ pub struct BoxscoreTeam {
 
 /// Boxscore /v1/gamecenter/{id}/boxscore endpoint.
 ///
-/// SEPARATE from StatsGameRecord — web API uses "awayTeam" / "homeTeam" nested objects
-/// and "awayTeamId" does not appear at the top level here.
+/// The web API uses nested `awayTeam` and `homeTeam` objects.
 #[derive(Deserialize)]
 pub struct BoxscoreGame {
     pub id: i64,
@@ -73,8 +68,6 @@ pub struct BoxscoreGame {
     #[serde(rename = "awayTeam")]
     pub away_team: BoxscoreTeam,
 }
-
-// ── Team ID mapping ───────────────────────────────────────────────────────────
 
 /// Deserialization record for the /team endpoint used to build the ID map.
 #[derive(Deserialize)]
@@ -104,12 +97,10 @@ pub async fn fetch_team_id_to_franchise_id_map() -> Result<HashMap<i64, i64>, An
     Ok(map)
 }
 
-// ── Fetchers ─────────────────────────────────────────────────────────────────
-
 /// Fetch all games for a season from the stats endpoint (paginates at limit=500).
 ///
-/// IMPORTANT: The NHL stats API uses `season` (not `seasonId`) and `id` (not `gameId`) as field
-/// names in cayenneExp/sort parameters. Using the wrong names returns HTTP 400.
+/// Query field names are `season` and `id`; the otherwise common
+/// `seasonId` and `gameId` forms return HTTP 400 here.
 pub async fn fetch_games_for_season(season_year: i32) -> Result<Vec<StatsGameRecord>, AnyError> {
     let mut all_games: Vec<StatsGameRecord> = Vec::new();
     let mut start: usize = 0;
@@ -143,8 +134,6 @@ pub async fn fetch_seasons_list() -> Result<Vec<i32>, AnyError> {
     let years: Vec<i32> = serde_json::from_str(&json)?;
     Ok(years)
 }
-
-// ── Transform ─────────────────────────────────────────────────────────────────
 
 /// Merge a stats record and an optional boxscore into a DbGame.
 ///

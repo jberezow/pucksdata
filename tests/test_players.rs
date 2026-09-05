@@ -1,6 +1,5 @@
 #[test]
 fn test_player_landing_deserialize() {
-    // Matches the real NHL API response shape for player 8478402 (Connor McDavid)
     let json = r#"{
         "playerId": 8478402,
         "firstName": {"default": "Connor"},
@@ -13,13 +12,11 @@ fn test_player_landing_deserialize() {
         "weightInKilograms": 88,
         "draftDetails": {"year": 2015, "teamAbbrev": "EDM", "round": 1, "pickInRound": 1, "overallPick": 1}
     }"#;
-    // This should deserialize without panicking
     let player: pucksdata::fetchers::players::PlayerLanding = serde_json::from_str(json).unwrap();
     assert_eq!(player.first_name.default, "Connor");
     assert_eq!(player.last_name.default, "McDavid");
     assert!(player.draft_details.is_some());
 
-    // Test player with no draft details and no current team
     let json2 = r#"{
         "playerId": 9999999,
         "firstName": {"default": "Test"},

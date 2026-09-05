@@ -1,4 +1,3 @@
--- migrations/0007_backfill_goals_into_shots.sql
 -- Backfill: insert a shots row for every goal event that has no shots row.
 --
 -- Goals are shots on net — the transform layer now double-inserts into both

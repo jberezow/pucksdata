@@ -13,7 +13,7 @@ fn chrono_to_time(dt: chrono::DateTime<chrono::Utc>) -> time::OffsetDateTime {
 
 /// Upsert a batch of games into the games table.
 ///
-/// Uses ON CONFLICT (game_id) DO UPDATE to ensure idempotency (QUAL-01).
+/// Uses `ON CONFLICT (game_id) DO UPDATE` for idempotency.
 /// Returns the count of records processed.
 ///
 /// FK note: home_team_id and away_team_id reference teams(team_id).

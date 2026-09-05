@@ -1,8 +1,6 @@
--- migrations/0003_event_type_tables.sql
 -- Event-type child tables: goals, shots, hits, blocks, penalties, faceoffs
 -- Each table has a 1:1 FK to events(id) via event_id PRIMARY KEY
 -- All player ID columns are nullable (EN goals, unassisted goals, offsetting penalties, etc.)
--- Depends on: 0002_events.sql (references events.id)
 
 CREATE TABLE goals (
     event_id            BIGINT PRIMARY KEY REFERENCES events(id),

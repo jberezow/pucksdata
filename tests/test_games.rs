@@ -1,7 +1,6 @@
 #[test]
 fn test_games_deserialize_stats_response() {
-    // Matches the real NHL stats API shape for /en/game
-    // CRITICAL: field is visitingTeamId / visitingScore, NOT awayTeamId / awayScore
+    // The stats endpoint uses `visitingTeamId` and `visitingScore`.
     let json = r#"{
         "data": [
             {
@@ -44,7 +43,6 @@ fn test_games_deserialize_stats_response() {
     assert_eq!(playoff.id, 2024030211_i64);
     assert!(playoff.home_score.is_none());
 
-    // Boxscore deserialization: venue is a localized object, teams have nested id/score
     let boxscore_json = r#"{
         "id": 2024020001,
         "startTimeUTC": "2024-10-09T00:00:00Z",
@@ -73,8 +71,6 @@ async fn test_games_upsert_idempotent() {
     }
     let pool = common::test_pool().await;
 
-    // Insert a test team first to satisfy the FK constraint on home_team_id / away_team_id
-    // Use high IDs unlikely to conflict with real NHL data
     sqlx::query!(
         "INSERT INTO teams (team_id, full_name, common_name, place_name, abbrev)
          VALUES (99001, 'Test Home', 'Home', 'Testville', 'HME'),
@@ -101,12 +97,10 @@ async fn test_games_upsert_idempotent() {
         away_score: Some(1),
     };
 
-    // Insert once
     pucksdata::loaders::games::upsert_games(pool, &[record], &indicatif::ProgressBar::hidden())
         .await
         .unwrap();
 
-    // Insert again with updated venue — should produce exactly one row
     let record2 = pucksdata::models::DbGame {
         game_id: 9900000001_i64,
         season: 20242025,
@@ -139,7 +133,6 @@ async fn test_games_upsert_idempotent() {
             .unwrap();
     assert_eq!(venue.as_deref(), Some("Test Arena Updated"));
 
-    // Cleanup
     sqlx::query!("DELETE FROM games WHERE game_id = 9900000001")
         .execute(pool)
         .await
@@ -158,9 +151,7 @@ async fn test_fetch_idempotency() {
     }
     let pool = common::test_pool().await;
 
-    // Use a small, known-complete season for the integration test.
-    // Season 20242025 is recent and teams must already be loaded via `pucksdata fetch teams`.
-    // This test validates QUAL-01: re-running any fetch command produces the same DB state.
+    // This live test expects the 2024–25 teams to be loaded already.
     let test_season = 20242025_i32;
 
     use indicatif::{ProgressBar, ProgressStyle};
@@ -171,7 +162,6 @@ async fn test_fetch_idempotency() {
             .progress_chars("=>-"),
     );
 
-    // First run
     let games_run1 =
         pucksdata::fetchers::games::fetch_games_for_season_enriched(test_season, &pb).await;
     assert!(
@@ -189,7 +179,6 @@ async fn test_fetch_idempotency() {
             .unwrap()
             .unwrap_or(0);
 
-    // Second run — upsert semantics should produce identical row count
     let games_run2 =
         pucksdata::fetchers::games::fetch_games_for_season_enriched(test_season, &pb).await;
     pucksdata::loaders::games::upsert_games(pool, &games_run2, &pb)

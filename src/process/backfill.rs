@@ -189,7 +189,6 @@ pub async fn run_backfill_with_refresh(
 
     const MAX_CONCURRENT_GAMES: usize = 5;
 
-    // Init spinner — wraps Steps 1-3
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
         ProgressStyle::with_template("{spinner} {msg}")
@@ -201,7 +200,6 @@ pub async fn run_backfill_with_refresh(
     );
     spinner.enable_steady_tick(Duration::from_millis(80));
 
-    // Step 1: Fetch team_id_map once — shared across all spawned tasks via Arc
     spinner.set_message("Fetching team ID map...");
     let team_id_map = Arc::new(
         crate::fetchers::games::fetch_team_id_to_franchise_id_map()
@@ -209,13 +207,11 @@ pub async fn run_backfill_with_refresh(
             .inspect_err(|_| spinner.finish_and_clear())?,
     );
 
-    // Step 2: Seed the queue, resetting selected checkpoints for a refresh.
     spinner.set_message("Seeding backfill queue...");
     seed_backfill_progress_with_refresh(pool, season_filter, refresh)
         .await
         .inspect_err(|_| spinner.finish_and_clear())?;
 
-    // Step 3: Query pending games (status != 'done')
     spinner.set_message("Loading pending games...");
     let pending_games = query_pending_games(pool, season_filter)
         .await
@@ -228,13 +224,11 @@ pub async fn run_backfill_with_refresh(
         return Ok(());
     }
 
-    // Step 4: Set up progress bar
     let pb = crate::ui::make_progress_bar(total as u64, "games");
 
-    // Step 5: Sliding window — pre-fill up to MAX_CONCURRENT_GAMES, then collect one + spawn one
+    // Keep the task window full without allocating one future per historical game.
     let mut join_set: JoinSet<BackfillTaskResult> = JoinSet::new();
 
-    // Track current season for per-season summaries
     let mut season_done: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
     let mut season_failed: std::collections::HashMap<i32, usize> = std::collections::HashMap::new();
     let mut season_skipped: std::collections::HashMap<i32, usize> =
@@ -248,7 +242,6 @@ pub async fn run_backfill_with_refresh(
 
     let mut games_iter = pending_games.into_iter();
 
-    // Helper closure to spawn one game task
     macro_rules! spawn_game {
         ($game:expr) => {{
             let game = $game;
@@ -266,12 +259,10 @@ pub async fn run_backfill_with_refresh(
         }};
     }
 
-    // Pre-fill up to MAX_CONCURRENT_GAMES
     for game in (&mut games_iter).take(MAX_CONCURRENT_GAMES) {
         spawn_game!(game);
     }
 
-    // Sliding window: collect one result, spawn one more, repeat
     while let Some(outcome) = join_set.join_next().await {
         match outcome {
             Ok((game_id, season, game_date, home_abbrev, away_abbrev, Ok(_count))) => {

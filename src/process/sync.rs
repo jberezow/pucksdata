@@ -58,15 +58,10 @@ async fn refresh_current_season_games(pool: &sqlx::PgPool) -> Result<usize, crat
     Ok(count)
 }
 
-/// Acquire the pucksdata daemon advisory lock for single-instance enforcement (QUAL-SYNC-02).
-/// Returns Ok(guard) if the lock was acquired — caller MUST hold the guard for the process lifetime.
-/// The guard is RAII: dropping it releases the lock and returns the connection to the pool.
-/// Returns Err with a clean message if another daemon instance is already running.
+/// Acquire the session-level advisory lock used to enforce a single daemon.
 ///
-/// PITFALL 1: Do NOT drop the guard early. Hold it in a `let _lock = acquire_daemon_lock(...).await?`
-///            binding at the top of the daemon arm in main.rs (Phase 8 task). Underscore prefix
-///            keeps the binding alive without an "unused variable" warning.
-/// PITFALL 2: try_acquire takes `PoolConnection<Postgres>`, not `&PgPool`. `pool.acquire()` is called first.
+/// The caller must retain the guard for the daemon's lifetime; dropping it
+/// releases the lock and returns its connection to the pool.
 pub async fn acquire_daemon_lock(
     pool: &sqlx::PgPool,
 ) -> Result<
@@ -83,9 +78,9 @@ pub async fn acquire_daemon_lock(
     }
 }
 
-/// Gap detection query (SYNC-02): returns games where game_date < today and no events row exists.
-/// from_date: optional floor on game_date (None = all historical games, Some(d) = >= d).
-/// Returns (game_id, game_state) pairs — game_state filtering is done in Rust (QUAL-SYNC-01).
+/// Return past games with no events, optionally bounded by a starting date.
+///
+/// Game-state filtering remains in Rust so unknown states can be reported.
 pub async fn query_sync_candidates(
     pool: &sqlx::PgPool,
     from_date: Option<time::Date>,
@@ -115,10 +110,7 @@ pub async fn query_sync_candidates(
         .collect())
 }
 
-/// Run the sync process: entity refresh → gap detection → event ingestion via load_one_game.
-/// from_date: optional floor on game_date for candidate detection.
-/// Returns Ok(SyncSummary) on all success paths (including zero candidates).
-/// Single return point at bottom — sync_state upsert fires on BOTH zero-candidate and non-zero paths.
+/// Refresh entities and ingest completed games that have no events.
 pub async fn run_sync(
     pool: &sqlx::PgPool,
     from_date: Option<time::Date>,
@@ -132,8 +124,7 @@ pub async fn run_sync(
 
     refresh_current_season_games(pool).await?;
 
-    // Step 1: Entity refresh — teams then players (SYNC-03)
-    // Must happen before team_id_map fetch to avoid stale map (Pitfall 3 from RESEARCH.md)
+    // Refresh teams before building the team-to-franchise map.
     println!("[sync 1/5] refreshing teams...");
     let teams = crate::fetchers::teams::fetch_teams().await?;
     crate::loaders::teams::upsert_teams(pool, &teams, &indicatif::ProgressBar::hidden()).await?;
@@ -144,17 +135,13 @@ pub async fn run_sync(
     crate::loaders::players::upsert_players(pool, &players).await?;
     println!("[sync 2/5] {} players upserted", players.len());
 
-    // Step 2: Fetch team_id_map once — shared across all spawned tasks via Arc
     let team_id_map = Arc::new(crate::fetchers::games::fetch_team_id_to_franchise_id_map().await?);
 
-    // Step 3: Gap detection query (SYNC-02) — returns (game_id, game_state) pairs
     println!("[sync 3/5] detecting games with missing events...");
     let candidates = query_sync_candidates(pool, from_date).await?;
     let candidates_count = candidates.len(); // all gap-detected candidates, before game_state filter
     println!("[sync 3/5] {candidates_count} candidate games found (regular season + playoffs, no events yet)");
 
-    // Step 4: Filter by is_game_completed(), warn on unknown states (QUAL-SYNC-01)
-    // Do NOT filter in SQL — must log unknown states explicitly
     let mut games_to_process: Vec<i64> = Vec::new();
     for (game_id, state) in &candidates {
         match state.as_deref() {
@@ -171,7 +158,6 @@ pub async fn run_sync(
         println!("[sync 4/5] nothing to do");
         (0usize, 0usize, 0usize)
     } else {
-        // Step 5: Semaphore + JoinSet concurrency (same as run_backfill — MAX_CONCURRENT_GAMES = 5)
         const MAX_CONCURRENT_GAMES: usize = 5;
         let sem = Arc::new(Semaphore::new(MAX_CONCURRENT_GAMES));
         let mut join_set: JoinSet<(i64, Result<usize, crate::AnyError>)> = JoinSet::new();
@@ -223,20 +209,14 @@ pub async fn run_sync(
         "[sync 5/5] complete:\n  candidates:  {candidates_count}\n  processed:   {processed}\n  failed:      {failed}\n  events:      {events_written}\n  duration:    {duration_secs:.1}s",
     );
 
-    // Step 6: Gap repair — fetch any player IDs present in event tables but absent from players.
-    // Catches players that slipped through enumerate_player_ids (edge cases, future regressions,
-    // or pre-existing gaps in historical data). Runs after event writes so all new event rows
-    // are visible to the repair query.
+    // Repair player references after all new event rows are visible.
     match crate::fetchers::players::repair_missing_players(pool).await {
         Ok(0) => {}
         Ok(n) => println!("repair: inserted {n} previously-missing players"),
         Err(e) => eprintln!("warn: repair_missing_players failed (non-fatal): {e}"),
     }
 
-    // Step 7: Upsert sync_state metadata (SCHEMA-15).
-    // Runs on BOTH zero-candidate and non-zero paths — single return point prevents Pitfall 3.
-    // Informational only — failure here does not invalidate the sync; but we propagate Err
-    // so the operator knows the metadata write failed.
+    // Record successful zero-work syncs as well as runs that ingested games.
     let now = time::OffsetDateTime::now_utc();
     sqlx::query!(
         r#"INSERT INTO sync_state (key, last_sync_at, last_sync_games, updated_at)
