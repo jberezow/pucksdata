@@ -1,11 +1,4 @@
-// tests/test_events.rs
-// Test scaffold for EVENT-01..EVENT-07 + QUAL-03
-// Unit tests for serde deserialization and situationCode decode.
-// Integration test stub for upsert idempotency (Plan 03 fills it in).
-
 mod common;
-
-// ── situationCode decode ──────────────────────────────────────────────────────
 
 #[test]
 fn test_situation_code_decode() {
@@ -57,14 +50,10 @@ fn test_strength_for_owner() {
     assert_eq!(strength("1451", None), None);
 }
 
-// ── EventDetails serde deserialization ───────────────────────────────────────
-// All six event type tests use the unified EventDetails struct.
-
 #[test]
 fn test_goal_details_deserialize() {
     use pucksdata::fetchers::events::EventDetails;
 
-    // All fields present
     let json = r#"{
         "xCoord": -56,
         "yCoord": 8,
@@ -86,7 +75,6 @@ fn test_goal_details_deserialize() {
     assert_eq!(details.y_coord, Some(8_i16));
     assert_eq!(details.zone_code.as_deref(), Some("O"));
 
-    // Only required fields — nullable fields absent (Option should be None)
     let json_minimal = r#"{
         "xCoord": -56,
         "yCoord": 8,
@@ -100,7 +88,6 @@ fn test_goal_details_deserialize() {
     assert_eq!(d2.assist2_player_id, None);
     assert_eq!(d2.goalie_in_net_id, None);
 
-    // Empty net goal: goalieInNetId explicitly null
     let json_en = r#"{
         "xCoord": -70,
         "yCoord": 0,
@@ -121,7 +108,6 @@ fn test_goal_details_deserialize() {
 fn test_shot_details_deserialize() {
     use pucksdata::fetchers::events::EventDetails;
 
-    // Verifies camelCase field name renames (shootingPlayerId, goalieInNetId, shotType)
     let json = r#"{
         "xCoord": 65,
         "yCoord": -12,
@@ -183,8 +169,7 @@ fn test_block_details_deserialize() {
 fn test_penalty_details_deserialize() {
     use pucksdata::fetchers::events::EventDetails;
 
-    // CRITICAL: duration field is "duration" (integer minutes), NOT "durationMinutes"
-    // CRITICAL: infraction description is "descKey", NOT "description"
+    // Penalties use `duration` and `descKey`, unlike several related NHL payloads.
     let json = r#"{
         "xCoord": 10,
         "yCoord": -20,
@@ -211,7 +196,6 @@ fn test_penalty_details_deserialize() {
     assert_eq!(details.committed_by_player_id, Some(8479318_i64));
     assert_eq!(details.drawn_by_player_id, Some(8480801_i64));
 
-    // Bench minor — drawnByPlayerId absent (nullable)
     let json_bench = r#"{
         "typeCode": "MIN",
         "descKey": "too-many-men",
@@ -250,7 +234,7 @@ fn test_faceoff_details_deserialize() {
     assert_eq!(details.zone_code.as_deref(), Some("N"));
 }
 
-// ── Goal double-insert (QUAL-02) ─────────────────────────────────────────────
+// Goal-derived shot idempotency.
 
 #[test]
 fn test_goal_produces_shot_entry() {
@@ -368,7 +352,6 @@ fn test_goal_produces_shot_entry() {
     );
     assert_eq!(goal_event.situation_code.as_deref(), Some("0651"));
 
-    // Find the goal-derived shot (same event ID as the goal).
     let goal_shot = shots
         .iter()
         .find(|s| s.event_id_in_game == 1081)
@@ -388,7 +371,6 @@ fn test_goal_produces_shot_entry() {
         "shot_type carried through from goal event"
     );
 
-    // The regular shot-on-goal must also be present
     let reg_shot = shots
         .iter()
         .find(|s| s.event_id_in_game == 200)
@@ -455,7 +437,7 @@ fn test_missing_situation_uses_goal_summary_without_fabricating_on_ice_state() {
     assert_eq!(event.strength_source, StrengthSource::HtmlReport);
 }
 
-// ── Integration stubs (DB required) ──────────────────────────────────────────
+// Database integration tests.
 
 #[tokio::test]
 async fn test_events_upsert_idempotent() {
@@ -464,7 +446,6 @@ async fn test_events_upsert_idempotent() {
     }
     let pool = common::test_pool().await;
 
-    // Insert prerequisite test team and game rows
     sqlx::query!(
         "INSERT INTO teams (team_id, full_name, common_name, place_name, abbrev)
          VALUES (99001, 'Test Home', 'Home', 'Testville', 'HME'),
@@ -484,7 +465,6 @@ async fn test_events_upsert_idempotent() {
     .await
     .unwrap();
 
-    // Build a minimal DbEvent + DbGoal for game 9900000002
     let event = pucksdata::models::DbEvent {
         game_id: 9900000002,
         event_id_in_game: 1,
@@ -547,7 +527,6 @@ async fn test_events_upsert_idempotent() {
     .await
     .unwrap();
 
-    // Rebuild event + goal (can't reuse moved values)
     let event2 = pucksdata::models::DbEvent {
         game_id: 9900000002,
         event_id_in_game: 1,
@@ -621,7 +600,6 @@ async fn test_events_upsert_idempotent() {
     assert_eq!(situation_code.as_deref(), Some("1451"));
     assert_eq!(away_skaters, Some(4));
 
-    // Cleanup (child rows cascade on events delete if FK is deferred, otherwise delete in order)
     sqlx::query!(
         "DELETE FROM goals WHERE event_id IN (SELECT id FROM events WHERE game_id = 9900000002)"
     )

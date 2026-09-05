@@ -160,11 +160,10 @@ async fn main() -> Result<(), pucksdata::AnyError> {
                 use std::time::Duration;
                 let pool = db::get_pool().await?;
 
-                // fetch_players() manages its own fetch-phase progress bar internally
                 let records = fetchers::players::fetch_players(pool).await?;
                 let count = records.len();
 
-                // Upsert phase — single bulk unnest INSERT; use spinner since no per-record granularity
+                // The bulk upsert has no meaningful per-record progress.
                 let spinner = {
                     use indicatif::{ProgressBar, ProgressStyle};
                     let s = ProgressBar::new_spinner();
@@ -251,13 +250,11 @@ async fn main() -> Result<(), pucksdata::AnyError> {
                 let pool = db::get_pool().await?;
 
                 if let Some(game_id) = args.scope.game {
-                    // --game <id>: single game fetch — hidden bar satisfies updated signature
                     let game = fetchers::games::fetch_single_game(game_id).await?;
                     loaders::games::upsert_games(pool, &[game], &indicatif::ProgressBar::hidden())
                         .await?;
                     println!("Fetched 1 record, upserted 1");
                 } else if let Some(season) = args.scope.season {
-                    // --season <year>: two-phase bars (fetch then upsert)
                     let pb_fetch = pucksdata::ui::make_progress_bar(0, "games fetched");
                     let games =
                         fetchers::games::fetch_games_for_season_enriched(season, &pb_fetch).await;
@@ -270,7 +267,6 @@ async fn main() -> Result<(), pucksdata::AnyError> {
                         .inspect_err(|_| pb_upsert.finish_and_clear())?;
                     pb_upsert.finish_and_clear();
                 } else {
-                    // --all: iterate all seasons, two-phase bars per season
                     let seasons = fetchers::games::fetch_seasons_list().await?;
                     let total_seasons = seasons.len();
                     let mut total_games = 0usize;

@@ -1,36 +1,21 @@
 //! Long-lived daemon — interval-based sync loop with SIGTERM/Ctrl-C graceful shutdown.
 
-/// Run the pucksdata daemon.
-///
-/// - Acquires an advisory lock (single-instance enforcement via QUAL-SYNC-02).
-/// - Optionally runs a full backfill before entering the loop (--backfill-on-start).
-/// - Calls run_sync() on each interval tick (DAEMON-01).
-/// - Uses MissedTickBehavior::Skip so a slow sync never causes burst catch-up (DAEMON-02).
-/// - Handles SIGTERM and Ctrl-C by aborting in-progress sync and exiting 0 (DAEMON-03).
-/// - Never accumulates errors across ticks — each error is logged and dropped (QUAL-SYNC-03).
+/// Run periodic synchronization until SIGTERM or Ctrl-C is received.
 pub async fn run_daemon(
     pool: &sqlx::PgPool,
     interval_secs: u64,
     backfill_on_start: bool,
 ) -> Result<(), crate::AnyError> {
-    // Advisory lock — held for process lifetime (QUAL-SYNC-02).
-    // Underscore prefix keeps the guard alive without "unused variable" lint.
-    // Returns Err immediately if another daemon is already running.
+    // Retaining the guard enforces a single daemon instance for this database.
     let _lock = crate::process::sync::acquire_daemon_lock(pool).await?;
 
-    // Optional startup backfill — propagate error rather than entering loop.
     if backfill_on_start {
         crate::process::backfill::run_backfill(pool, None).await?;
     }
 
-    // Interval construction: set Skip BEFORE the first tick fires (DAEMON-02).
-    // MissedTickBehavior::Burst (the tokio default) must NOT be used.
+    // A slow sync should skip missed ticks rather than trigger burst catch-up.
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    // Alert hooks were considered for v1.3 but deferred indefinitely — the daemon's
-    // SIGTERM/Ctrl-C shutdown is sufficient for operational use. If alerting is ever
-    // needed, add a CancellationToken here and pass child tokens to hook tasks.
 
     run_loop(pool, interval_secs, &mut interval).await
 }
@@ -41,9 +26,7 @@ async fn run_loop(
     interval_secs: u64,
     interval: &mut tokio::time::Interval,
 ) -> Result<(), crate::AnyError> {
-    // Shutdown channel: signal tasks send true immediately on receipt so the
-    // message appears right away; the main loop drains after the current sync
-    // completes (Pitfall 1: never interrupt a sync mid-way).
+    // Signal tasks notify the loop, which cancels an active sync before exiting.
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
     let tx1 = shutdown_tx.clone();
@@ -67,8 +50,7 @@ async fn run_loop(
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                // Race the sync against the shutdown signal.  If SIGTERM arrives
-                // mid-sync, drop the sync future and exit immediately.  Syncs are
+                // If shutdown arrives mid-sync, drop the sync future. Syncs are
                 // idempotent so aborting mid-way is safe.
                 tokio::select! {
                     _ = tick_sync(pool, interval_secs) => {}
@@ -82,7 +64,6 @@ async fn run_loop(
                 }
             }
 
-            // Fired when idle between ticks.
             _ = shutdown_rx.changed() => {
                 break;
             }
@@ -130,10 +111,7 @@ async fn run_loop(
     Ok(())
 }
 
-/// Execute one sync tick.
-///
-/// Logs start time and runs a complete synchronization. Errors are logged and
-/// retried at the next interval rather than accumulated between ticks.
+/// Execute one sync tick, leaving failures for the next interval to retry.
 async fn tick_sync(pool: &sqlx::PgPool, interval_secs: u64) {
     eprintln!(
         "[{}] starting sync",
@@ -146,7 +124,6 @@ async fn tick_sync(pool: &sqlx::PgPool, interval_secs: u64) {
             eprintln!("next sync at {} UTC", next.format("%H:%M"));
         }
         Err(e) => {
-            // Log and continue — do NOT accumulate errors (QUAL-SYNC-03 / Pitfall 6).
             eprintln!("sync failed, continuing: {e}");
         }
     }

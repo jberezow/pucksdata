@@ -2,14 +2,7 @@
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-/// Create a consistently-styled progress bar with the project-standard 8-block template.
-///
-/// - `total`: number of items (passed to ProgressBar::new)
-/// - `label`: short descriptor shown in the `{msg}` slot (e.g. "teams", "seasons")
-///
-/// Style matches the Phase 10 backfill bar exactly (40-char width, cyan/blue, 8-level
-/// block chars). Call `pb.finish_and_clear()` when done, or use the
-/// `inspect_err(|_| pb.finish_and_clear())` pattern on any fallible operation.
+/// Create a progress bar with the shared style and throughput display.
 pub fn make_progress_bar(total: u64, label: &str) -> ProgressBar {
     let pb = ProgressBar::new(total);
     pb.set_style(

@@ -56,8 +56,7 @@ pub struct PeriodDescriptor {
 
 /// Unified flat struct for all possible event detail fields.
 ///
-/// Uses #[serde(default)] on every optional field so missing JSON keys
-/// deserialize to None without error (Pitfall 3 avoidance).
+/// Optional fields use `serde(default)` because event payloads vary by type.
 /// All six event types share this single struct.
 #[derive(Deserialize)]
 pub struct EventDetails {
@@ -96,7 +95,7 @@ pub struct EventDetails {
     #[serde(rename = "blockingPlayerId", default)]
     pub blocking_player_id: Option<i64>,
 
-    // Penalty fields — CRITICAL: field is "duration" not "durationMinutes"; "descKey" not "description"
+    // Penalties use `duration` and `descKey`, unlike several related NHL payloads.
     #[serde(rename = "typeCode", default)]
     pub type_code: Option<String>,
     #[serde(rename = "descKey", default)]
@@ -457,10 +456,8 @@ pub fn transform_events_with_strength_sources(
                             goalie_id: d.goalie_in_net_id,
                             shot_type: d.shot_type.clone(),
                         });
-                        // Goals are also shots on net — double-insert into shots vector.
-                        // Map: d.scoring_player_id → shooting_player_id (NHL API uses different key for goal events).
-                        // Do NOT use d.shooting_player_id here — it deserializes from "shootingPlayerId" which is
-                        // absent in goal events and will always be None.
+                        // Goal payloads identify the shooter as `scoringPlayerId`,
+                        // while shot payloads use `shootingPlayerId`.
                         shots.push(DbShot {
                             event_id_in_game: play.event_id,
                             shooting_player_id: d.scoring_player_id,

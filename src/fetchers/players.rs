@@ -427,7 +427,7 @@ pub async fn repair_missing_players(pool: &sqlx::PgPool) -> Result<usize, AnyErr
     Ok(records.len())
 }
 
-/// Public entry point: enumerate all player IDs, fetch all landing pages, return DbPlayer records.
+/// Enumerate player IDs and fetch their landing pages.
 ///
 /// Queries the DB for all distinct season IDs in the games table so that
 /// `enumerate_player_ids` covers every season that has game data — including
